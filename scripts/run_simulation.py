@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from arbiter.models.task import Task
 from arbiter.models.worker import Worker
 from arbiter.schedulers.fifo import FIFOScheduler
+from arbiter.schedulers.heuristic import HeuristicScheduler
 from arbiter.simulator.generator import ScenarioGenerator
 from arbiter.simulator.engine import SimulationEngine
 
@@ -29,6 +30,7 @@ def get_scheduler(name: str):
     """Factory function to get a scheduler by name."""
     schedulers = {
         "fifo": FIFOScheduler,
+        "heuristic": HeuristicScheduler,
     }
     if name.lower() not in schedulers:
         available = ", ".join(schedulers.keys())
