@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arbiter-engine"
-version = "0.1.0"
+version = "0.7.0"
 description = "AI-driven intelligent scheduling and resource allocation engine"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,7 +25,12 @@ dependencies = [
     "redis>=5.0",
     "websockets>=12.0",
     "httpx>=0.27",
+    "prometheus-client>=0.20",
+    "docker>=7.0",
 ]
+
+[project.scripts]
+arbiter-serve = "arbiter.api.server:serve"
 
 [project.optional-dependencies]
 dev = [
