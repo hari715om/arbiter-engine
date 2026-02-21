@@ -1,0 +1,63 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: arbiter
+      POSTGRES_PASSWORD: arbiter
+      POSTGRES_DB: arbiter
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arbiter"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    command: uvicorn arbiter.api.app:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      ARBITER_DATABASE_URL: postgresql+psycopg://arbiter:arbiter@db:5432/arbiter
+      ARBITER_REDIS_URL: redis://redis:6379/0
+      ARBITER_SCHEDULER_TYPE: utility
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  worker:
+    build: .
+    command: celery -A arbiter.api.queue.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      ARBITER_DATABASE_URL: postgresql+psycopg://arbiter:arbiter@db:5432/arbiter
+      ARBITER_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - api
+      - redis
+      - db
+
+  beat:
+    build: .
+    command: celery -A arbiter.api.queue.celery_app beat --loglevel=info
+    environment:
+      ARBITER_DATABASE_URL: postgresql+psycopg://arbiter:arbiter@db:5432/arbiter
+      ARBITER_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+      - db
+
+volumes:
+  pgdata:
