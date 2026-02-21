@@ -10,7 +10,13 @@ from arbiter.ml.models import RuntimePredictor, FailureClassifier
 
 
 class MLScheduler(HeuristicScheduler):
-    """Extends HeuristicScheduler with ML-predicted runtime and failure risk."""
+    """Extends HeuristicScheduler with ML-predicted runtime and failure risk.
+
+    Unlike the heuristic (which uses hardcoded formulas), the ML scheduler
+    uses trained models that learn from actual simulation outcomes —
+    capturing patterns like resource contention, worker reliability, and
+    retry risk that heuristic formulas cannot express.
+    """
 
     def __init__(
         self,
@@ -31,13 +37,28 @@ class MLScheduler(HeuristicScheduler):
         self.runtime_predictor = runtime_predictor or RuntimePredictor()
         self.failure_classifier = failure_classifier or FailureClassifier()
         self.w_risk = w_risk
+        self._context: dict = {}
+
+    def set_context(self, context: dict) -> None:
+        """Update runtime context (queue depth, worker reliability, etc.)."""
+        self._context = context
+
+    def schedule(
+        self, tasks: list[Task], workers: list[Worker],
+        completed_task_ids: set[str],
+    ) -> list[Assignment]:
+        """Schedule with context — auto-compute queue depth."""
+        self._context["queue_depth"] = len(tasks)
+        return super().schedule(tasks, workers, completed_task_ids)
 
     def _score_task(self, task: Task, dependents_map: dict[str, int]) -> float:
         """Score task using ML-predicted runtime for urgency calculation."""
         priority_score = task.priority / 10.0
 
-        # Use ML-predicted runtime instead of estimated_duration for urgency
-        predicted_runtime = self.runtime_predictor.predict(task, self._dummy_worker())
+        # Use ML-predicted runtime (considers contention, worker variability)
+        predicted_runtime = self.runtime_predictor.predict(
+            task, self._avg_worker(), context=self._context,
+        )
         time_remaining = max(task.deadline - self.current_time, 0.01)
         urgency_score = min(1.0, predicted_runtime / time_remaining)
 
@@ -58,16 +79,22 @@ class MLScheduler(HeuristicScheduler):
         if base_score < 0:
             return base_score
 
-        # Penalize risky task-worker pairs
-        predicted_failure = self.failure_classifier.predict_proba(task, worker)
-        risk_penalty = 1.0 - predicted_failure  # 0.0 = always fails, 1.0 = never fails
+        # Use per-worker context for failure prediction
+        ctx = {**self._context, "worker_reliability": self._context.get(
+            f"reliability_{worker.id}", 1.0
+        )}
+
+        predicted_failure = self.failure_classifier.predict_proba(
+            task, worker, context=ctx,
+        )
+        risk_penalty = 1.0 - predicted_failure
 
         return (1.0 - self.w_risk) * base_score + self.w_risk * risk_penalty
 
-    def _dummy_worker(self) -> Worker:
-        """Dummy worker for task-only predictions (average worker stats)."""
+    def _avg_worker(self) -> Worker:
+        """Average worker for task-only predictions (when worker isn't known yet)."""
         return Worker(
-            id="__dummy__", cpu_capacity=100.0, memory_capacity=512.0,
+            id="__avg__", cpu_capacity=100.0, memory_capacity=512.0,
             speed_multiplier=1.0,
         )
 

@@ -20,8 +20,10 @@ RESOURCE_ENCODING = {"cpu": 0, "gpu": 1, "memory": 2}
 
 FEATURE_COLUMNS = [
     "compute_cost", "estimated_duration", "priority", "failure_probability",
-    "dependency_count", "resource_type_encoded",
+    "dependency_count", "resource_type_encoded", "retry_count",
     "worker_speed", "worker_capacity", "worker_load_ratio",
+    "worker_active_tasks", "worker_reliability",
+    "queue_depth",
 ]
 
 
@@ -72,17 +74,22 @@ class RuntimePredictor:
         self.is_trained = True
         return self.metrics
 
-    def predict(self, task: Task, worker: Worker) -> float:
+    def predict(self, task: Task, worker: Worker, context: dict | None = None) -> float:
         """Predict runtime for a task on a worker. Falls back to estimated_duration."""
         if not self.is_trained or self.model is None:
             return task.estimated_duration
 
+        ctx = context or {}
         features = np.array([[
             task.compute_cost, task.estimated_duration, task.priority,
             task.failure_probability, len(task.dependencies),
             RESOURCE_ENCODING.get(task.resource_type, 0),
+            task.retry_count,
             worker.speed_multiplier, worker.cpu_capacity,
             task.compute_cost / worker.cpu_capacity,
+            len(worker.active_tasks),
+            ctx.get("worker_reliability", 1.0),
+            ctx.get("queue_depth", 0),
         ]])
 
         prediction = self.model.predict(features)[0]
@@ -146,17 +153,22 @@ class FailureClassifier:
         self.is_trained = True
         return self.metrics
 
-    def predict_proba(self, task: Task, worker: Worker) -> float:
+    def predict_proba(self, task: Task, worker: Worker, context: dict | None = None) -> float:
         """Predict failure probability [0, 1]. Falls back to task.failure_probability."""
         if not self.is_trained or self.model is None:
             return task.failure_probability
 
+        ctx = context or {}
         features = np.array([[
             task.compute_cost, task.estimated_duration, task.priority,
             task.failure_probability, len(task.dependencies),
             RESOURCE_ENCODING.get(task.resource_type, 0),
+            task.retry_count,
             worker.speed_multiplier, worker.cpu_capacity,
             task.compute_cost / worker.cpu_capacity,
+            len(worker.active_tasks),
+            ctx.get("worker_reliability", 1.0),
+            ctx.get("queue_depth", 0),
         ]])
 
         proba = self.model.predict_proba(features)

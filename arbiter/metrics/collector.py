@@ -31,6 +31,9 @@ class MetricsReport:
     sla_violation_rate: float = 0.0
     failure_rate: float = 0.0
     total_simulation_time: float = 0.0
+    total_wasted_time: float = 0.0
+    total_retries: int = 0
+    cost_efficiency: float = 0.0
     per_worker_utilization: dict[str, float] = field(default_factory=dict)
 
 
@@ -81,6 +84,20 @@ class MetricsCollector:
         finished_tasks = len(completed_tasks) + len(failed_tasks)
         if finished_tasks > 0:
             report.failure_rate = len(failed_tasks) / finished_tasks
+
+        # Failure cost: wasted time on tasks that ultimately failed permanently
+        report.total_retries = sum(t.retry_count for t in tasks)
+        wasted_time = 0.0
+        useful_time = 0.0
+        for t in completed_tasks:
+            if t.start_time is not None and t.completion_time is not None:
+                useful_time += t.completion_time - t.start_time
+        for t in failed_tasks:
+            if t.start_time is not None and t.completion_time is not None:
+                wasted_time += t.completion_time - t.start_time
+        report.total_wasted_time = wasted_time
+        total_work = useful_time + wasted_time
+        report.cost_efficiency = useful_time / total_work if total_work > 0 else 1.0
 
         # Per-worker utilization: busy_time / total_time
         if total_time > 0 and workers:
@@ -153,6 +170,12 @@ class MetricsCollector:
             "Failure Rate",
             f"[{'red' if r.failure_rate > 0.1 else 'green'}]{r.failure_rate:.1%}[/]"
         )
+        perf_table.add_row("Total Retries", str(r.total_retries))
+        perf_table.add_row("Wasted Time", f"{r.total_wasted_time:.2f}")
+        perf_table.add_row(
+            "Cost Efficiency",
+            f"[{'red' if r.cost_efficiency < 0.9 else 'green'}]{r.cost_efficiency:.1%}[/]"
+        )
         perf_table.add_row("Simulation Time", f"{r.total_simulation_time:.2f}")
         console.print(perf_table)
 
@@ -185,6 +208,9 @@ class MetricsCollector:
         print(f"  Throughput:          {r.throughput:.4f}")
         print(f"  SLA Violation Rate:  {r.sla_violation_rate:.1%}")
         print(f"  Failure Rate:        {r.failure_rate:.1%}")
+        print(f"  Total Retries:       {r.total_retries}")
+        print(f"  Wasted Time:         {r.total_wasted_time:.2f}")
+        print(f"  Cost Efficiency:     {r.cost_efficiency:.1%}")
         print(f"  Avg Utilization:     {r.avg_worker_utilization:.1%}")
         print(f"  Simulation Time:     {r.total_simulation_time:.2f}")
         print(f"{'='*50}\n")

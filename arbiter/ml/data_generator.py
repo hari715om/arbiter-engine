@@ -45,6 +45,12 @@ class TrainingDataGenerator:
             # Build worker lookup for feature extraction
             worker_map = {w.id: w for w in workers}
 
+            # Count queued tasks at end for queue depth approximation
+            queue_depth = sum(
+                1 for t in engine.tasks.values()
+                if t.status in (TaskStatus.QUEUED, TaskStatus.PENDING)
+            )
+
             for task in engine.tasks.values():
                 if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED):
                     continue
@@ -60,11 +66,19 @@ class TrainingDataGenerator:
                     if task.completion_time is not None else 0.0
                 )
 
-                all_samples.append(self._extract_features(task, worker, actual_runtime))
+                # Get worker reliability at end of simulation
+                worker_rel = engine.worker_reliability.get(worker.id, 1.0)
+
+                all_samples.append(self._extract_features(
+                    task, worker, actual_runtime, queue_depth, worker_rel,
+                ))
 
         return all_samples
 
-    def _extract_features(self, task: Task, worker: Worker, actual_runtime: float) -> dict:
+    def _extract_features(
+        self, task: Task, worker: Worker, actual_runtime: float,
+        queue_depth: int, worker_reliability: float,
+    ) -> dict:
         """Extract a feature dict from a completed/failed task."""
         return {
             # Task features
@@ -74,10 +88,15 @@ class TrainingDataGenerator:
             "failure_probability": task.failure_probability,
             "dependency_count": len(task.dependencies),
             "resource_type_encoded": RESOURCE_ENCODING.get(task.resource_type, 0),
+            "retry_count": task.retry_count,
             # Worker features
             "worker_speed": worker.speed_multiplier,
             "worker_capacity": worker.cpu_capacity,
             "worker_load_ratio": task.compute_cost / worker.cpu_capacity,
+            "worker_active_tasks": len(worker.active_tasks),
+            "worker_reliability": worker_reliability,
+            # Context features
+            "queue_depth": queue_depth,
             # Targets
             "actual_runtime": actual_runtime,
             "did_fail": 1 if task.status == TaskStatus.FAILED else 0,

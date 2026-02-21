@@ -57,7 +57,6 @@ def print_comparison(reports: dict[str, MetricsReport]):
         color = "red" if (pct > 0 and lower_better) or (pct < 0 and not lower_better) else "green"
         return f"[{color}]{sign}{pct:.1f}%[/]" if HAS_RICH else f"{sign}{pct:.1f}%"
 
-    # Build metric rows: (name, extract_fn, lower_better)
     metric_defs = [
         ("Tasks Completed", lambda r: r.tasks_completed, False),
         ("Tasks Failed", lambda r: r.tasks_failed, True),
@@ -67,18 +66,20 @@ def print_comparison(reports: dict[str, MetricsReport]):
         ("Throughput", lambda r: r.throughput, False),
         ("SLA Violation Rate", lambda r: r.sla_violation_rate, True),
         ("Failure Rate", lambda r: r.failure_rate, True),
+        ("Total Retries", lambda r: r.total_retries, True),
+        ("Wasted Time", lambda r: r.total_wasted_time, True),
+        ("Cost Efficiency", lambda r: r.cost_efficiency, False),
         ("Avg Utilization", lambda r: r.avg_worker_utilization, False),
     ]
 
-    def fmt_val(val, is_rate=False, is_pct=False):
+    def fmt_val(val, is_rate=False):
         if isinstance(val, int):
             return str(val)
-        if is_pct or is_rate:
+        if is_rate:
             return f"{val:.1%}"
         return f"{val:.4f}" if val < 1 else f"{val:.2f}"
 
-    rate_metrics = {"SLA Violation Rate", "Failure Rate", "Avg Utilization"}
-    baseline = reports[names[0]]
+    rate_metrics = {"SLA Violation Rate", "Failure Rate", "Avg Utilization", "Cost Efficiency"}
 
     if HAS_RICH:
         title = " vs ".join(names)

@@ -30,6 +30,8 @@ class Task(BaseModel):
     completion_time: Optional[float] = Field(default=None, description="When execution finished")
     status: TaskStatus = Field(default=TaskStatus.PENDING, description="Current lifecycle state")
     assigned_worker: Optional[str] = Field(default=None, description="Worker ID if assigned")
+    retry_count: int = Field(default=0, ge=0, description="Number of failed attempts so far")
+    max_retries: int = Field(default=2, ge=0, description="Max retry attempts before permanent failure")
 
     @property
     def is_ready(self) -> bool:
