@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from arbiter.schedulers.fifo import FIFOScheduler
 from arbiter.schedulers.heuristic import HeuristicScheduler
 from arbiter.schedulers.ml_scheduler import MLScheduler
+from arbiter.schedulers.utility_scheduler import UtilityScheduler
 from arbiter.simulator.generator import ScenarioGenerator
 from arbiter.simulator.engine import SimulationEngine
 from arbiter.simulator.failure_injector import FailureInjector
@@ -74,6 +75,7 @@ def print_comparison(reports: dict[str, MetricsReport]):
         ("Worker Failures", lambda r: r.worker_failures, True),
         ("Tasks Preempted", lambda r: r.tasks_preempted, True),
         ("SLA Risks", lambda r: r.sla_risks_detected, True),
+        ("Fairness Index", lambda r: r.fairness_index, False),
         ("Avg Utilization", lambda r: r.avg_worker_utilization, False),
     ]
 
@@ -163,6 +165,7 @@ def main():
         "FIFO": run_with_scheduler(FIFOScheduler(), tasks, workers, args.seed, injector),
         "Heuristic": run_with_scheduler(HeuristicScheduler(), tasks, workers, args.seed, injector),
         "ML": run_with_scheduler(get_ml_scheduler(), tasks, workers, args.seed, injector),
+        "Utility": run_with_scheduler(UtilityScheduler(), tasks, workers, args.seed, injector),
     }
 
     print_comparison(reports)

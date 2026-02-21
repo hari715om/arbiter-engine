@@ -37,6 +37,7 @@ class MetricsReport:
     worker_failures: int = 0
     tasks_preempted: int = 0
     sla_risks_detected: int = 0
+    fairness_index: float = 0.0
     per_worker_utilization: dict[str, float] = field(default_factory=dict)
 
 
@@ -132,6 +133,18 @@ class MetricsCollector:
             report.avg_worker_utilization = (
                 sum(report.per_worker_utilization.values()) / len(workers)
             )
+
+            # Jain's fairness index: measures how evenly work is distributed
+            # J = (Σxi)² / (n · Σxi²), where xi = worker utilization
+            # 1.0 = perfectly fair, 1/n = maximally unfair
+            utils = list(report.per_worker_utilization.values())
+            sum_x = sum(utils)
+            sum_x2 = sum(x * x for x in utils)
+            n = len(utils)
+            if n > 0 and sum_x2 > 0:
+                report.fairness_index = (sum_x ** 2) / (n * sum_x2)
+            else:
+                report.fairness_index = 1.0
 
         self.report = report
         return report
