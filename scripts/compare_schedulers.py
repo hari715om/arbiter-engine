@@ -15,6 +15,7 @@ from arbiter.schedulers.heuristic import HeuristicScheduler
 from arbiter.schedulers.ml_scheduler import MLScheduler
 from arbiter.simulator.generator import ScenarioGenerator
 from arbiter.simulator.engine import SimulationEngine
+from arbiter.simulator.failure_injector import FailureInjector
 from arbiter.metrics.collector import MetricsReport
 
 try:
@@ -26,11 +27,12 @@ except ImportError:
     HAS_RICH = False
 
 
-def run_with_scheduler(scheduler, tasks, workers, seed):
+def run_with_scheduler(scheduler, tasks, workers, seed, failure_injector=None):
     """Run simulation with a given scheduler and return the metrics report."""
     engine = SimulationEngine(
         tasks=tasks, workers=workers,
         scheduler=scheduler, seed=seed,
+        failure_injector=failure_injector,
     )
     metrics = engine.run()
     return metrics.report
@@ -69,6 +71,9 @@ def print_comparison(reports: dict[str, MetricsReport]):
         ("Total Retries", lambda r: r.total_retries, True),
         ("Wasted Time", lambda r: r.total_wasted_time, True),
         ("Cost Efficiency", lambda r: r.cost_efficiency, False),
+        ("Worker Failures", lambda r: r.worker_failures, True),
+        ("Tasks Preempted", lambda r: r.tasks_preempted, True),
+        ("SLA Risks", lambda r: r.sla_risks_detected, True),
         ("Avg Utilization", lambda r: r.avg_worker_utilization, False),
     ]
 
@@ -125,6 +130,11 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument("--deadline-tightness", type=float, default=2.0)
     parser.add_argument("--dependency-density", type=float, default=0.2)
+    parser.add_argument("--failure-mode", type=str, default=None,
+                        choices=["random", "periodic", "burst"],
+                        help="Enable worker failure injection")
+    parser.add_argument("--failure-rate", type=float, default=0.02,
+                        help="Failure rate for injection (default: 0.02)")
 
     args = parser.parse_args()
 
@@ -137,12 +147,22 @@ def main():
     workers = gen.generate_workers(num_workers=args.workers)
 
     if HAS_RICH:
-        console.print(f"[bold]Scenario:[/bold] {len(tasks)} tasks, {len(workers)} workers, seed={args.seed}\n")
+        mode_str = f", failure_mode={args.failure_mode}" if args.failure_mode else ""
+        console.print(f"[bold]Scenario:[/bold] {len(tasks)} tasks, {len(workers)} workers, seed={args.seed}{mode_str}\n")
+
+    # Phase 4: create failure injector if requested
+    injector = None
+    if args.failure_mode:
+        injector = FailureInjector(
+            mode=args.failure_mode,
+            failure_rate=args.failure_rate,
+            seed=args.seed,
+        )
 
     reports = {
-        "FIFO": run_with_scheduler(FIFOScheduler(), tasks, workers, args.seed),
-        "Heuristic": run_with_scheduler(HeuristicScheduler(), tasks, workers, args.seed),
-        "ML": run_with_scheduler(get_ml_scheduler(), tasks, workers, args.seed),
+        "FIFO": run_with_scheduler(FIFOScheduler(), tasks, workers, args.seed, injector),
+        "Heuristic": run_with_scheduler(HeuristicScheduler(), tasks, workers, args.seed, injector),
+        "ML": run_with_scheduler(get_ml_scheduler(), tasks, workers, args.seed, injector),
     }
 
     print_comparison(reports)

@@ -34,6 +34,9 @@ class MetricsReport:
     total_wasted_time: float = 0.0
     total_retries: int = 0
     cost_efficiency: float = 0.0
+    worker_failures: int = 0
+    tasks_preempted: int = 0
+    sla_risks_detected: int = 0
     per_worker_utilization: dict[str, float] = field(default_factory=dict)
 
 
@@ -49,6 +52,10 @@ class MetricsCollector:
         workers: list[Worker],
         total_time: float,
         scheduler_name: str,
+        # Phase 4 stats (passed from engine)
+        tasks_preempted: int = 0,
+        worker_failures: int = 0,
+        sla_risks_detected: int = 0,
     ) -> MetricsReport:
         """Compute all metrics from final task/worker states."""
         report = MetricsReport(
@@ -98,6 +105,11 @@ class MetricsCollector:
         report.total_wasted_time = wasted_time
         total_work = useful_time + wasted_time
         report.cost_efficiency = useful_time / total_work if total_work > 0 else 1.0
+
+        # Phase 4 stats
+        report.worker_failures = worker_failures
+        report.tasks_preempted = tasks_preempted
+        report.sla_risks_detected = sla_risks_detected
 
         # Per-worker utilization: busy_time / total_time
         if total_time > 0 and workers:
@@ -177,6 +189,10 @@ class MetricsCollector:
             f"[{'red' if r.cost_efficiency < 0.9 else 'green'}]{r.cost_efficiency:.1%}[/]"
         )
         perf_table.add_row("Simulation Time", f"{r.total_simulation_time:.2f}")
+        if r.worker_failures > 0 or r.tasks_preempted > 0:
+            perf_table.add_row("Worker Failures", f"[red]{r.worker_failures}[/red]")
+            perf_table.add_row("Tasks Preempted", f"[yellow]{r.tasks_preempted}[/yellow]")
+            perf_table.add_row("SLA Risks Detected", str(r.sla_risks_detected))
         console.print(perf_table)
 
         if r.per_worker_utilization:
@@ -213,4 +229,8 @@ class MetricsCollector:
         print(f"  Cost Efficiency:     {r.cost_efficiency:.1%}")
         print(f"  Avg Utilization:     {r.avg_worker_utilization:.1%}")
         print(f"  Simulation Time:     {r.total_simulation_time:.2f}")
+        if r.worker_failures > 0 or r.tasks_preempted > 0:
+            print(f"  Worker Failures:     {r.worker_failures}")
+            print(f"  Tasks Preempted:     {r.tasks_preempted}")
+            print(f"  SLA Risks Detected:  {r.sla_risks_detected}")
         print(f"{'='*50}\n")

@@ -1,4 +1,10 @@
-"""Simulation Engine — core event-driven execution loop."""
+"""Simulation Engine — core event-driven execution loop.
+
+Phase 4 additions:
+- Failure injection integration (worker crashes/recoveries)
+- Dynamic replanning (preempt tasks on failed workers, re-queue, reschedule)
+- SLA risk monitoring (periodic checks for at-risk tasks)
+"""
 
 import heapq
 import random
@@ -8,11 +14,18 @@ from arbiter.models.task import Task, TaskStatus
 from arbiter.models.worker import Worker, WorkerStatus
 from arbiter.schedulers.base import BaseScheduler, Assignment
 from arbiter.simulator.events import Event, EventType
+from arbiter.simulator.failure_injector import FailureInjector
+from arbiter.simulator.sla_monitor import SLAMonitor
 from arbiter.metrics.collector import MetricsCollector
 
 
 class SimulationEngine:
-    """Event-driven simulation engine for task scheduling."""
+    """Event-driven simulation engine for task scheduling.
+
+    Phase 4: supports worker failure injection and dynamic replanning.
+    When a worker crashes, all running tasks are preempted, re-queued,
+    and rescheduled on surviving workers — like K8s pod eviction.
+    """
 
     def __init__(
         self,
@@ -21,12 +34,16 @@ class SimulationEngine:
         scheduler: BaseScheduler,
         seed: int = 42,
         time_limit: float = 10000.0,
+        failure_injector: FailureInjector | None = None,
+        sla_check_interval: float = 100.0,
     ):
         self.tasks: dict[str, Task] = {t.id: t.model_copy() for t in tasks}
         self.workers: dict[str, Worker] = {w.id: w.model_copy() for w in workers}
         self.scheduler = scheduler
         self.rng = random.Random(seed)
         self.time_limit = time_limit
+        self.failure_injector = failure_injector
+        self.sla_check_interval = sla_check_interval
 
         self._event_queue: list[Event] = []
         self._event_counter: int = 0
@@ -36,13 +53,18 @@ class SimulationEngine:
         self.event_log: list[Event] = []
 
         # Worker reliability tracking (models hardware degradation patterns)
-        # 1.0 = fully reliable, degrades on failure, recovers slowly on success
         self.worker_reliability: dict[str, float] = {
             w.id: 1.0 for w in workers
         }
 
+        # Phase 4: SLA monitor and replanning stats
+        self.sla_monitor = SLAMonitor()
+        self.tasks_preempted: int = 0
+        self.worker_failure_count: int = 0
+
     def run(self) -> MetricsCollector:
-        """Run the simulation: push arrivals → process events → return metrics."""
+        """Run the simulation: push arrivals → inject failures → process events."""
+        # Push task arrival events
         for task in self.tasks.values():
             self._push_event(Event(
                 time=task.arrival_time,
@@ -51,6 +73,28 @@ class SimulationEngine:
                 task_id=task.id,
             ))
 
+        # Inject worker failure/recovery events (Phase 4)
+        if self.failure_injector is not None:
+            injected = self.failure_injector.generate_events(
+                workers=list(self.workers.values()),
+                time_limit=self.time_limit,
+            )
+            for event in injected:
+                # Re-sequence so injected events integrate cleanly
+                event.sequence = self._next_sequence()
+                self._push_event(event)
+
+        # Schedule periodic SLA risk checks (Phase 4)
+        t = self.sla_check_interval
+        while t < self.time_limit:
+            self._push_event(Event(
+                time=t,
+                sequence=self._next_sequence(),
+                event_type=EventType.SLA_RISK_CHECK,
+            ))
+            t += self.sla_check_interval
+
+        # Main event loop
         while self._event_queue:
             event = heapq.heappop(self._event_queue)
             if event.time > self.time_limit:
@@ -72,12 +116,18 @@ class SimulationEngine:
                     self._handle_worker_failure(event)
                 case EventType.WORKER_RECOVERY:
                     self._handle_worker_recovery(event)
+                case EventType.SLA_RISK_CHECK:
+                    self._handle_sla_check(event)
 
         self._metrics.calculate(
             tasks=list(self.tasks.values()),
             workers=list(self.workers.values()),
             total_time=self._current_time,
             scheduler_name=self.scheduler.name,
+            # Phase 4 stats
+            tasks_preempted=self.tasks_preempted,
+            worker_failures=self.worker_failure_count,
+            sla_risks_detected=self.sla_monitor.total_alerts,
         )
 
         return self._metrics
@@ -87,7 +137,9 @@ class SimulationEngine:
     def _handle_task_arrival(self, event: Event) -> None:
         """Mark task QUEUED and trigger scheduling."""
         task = self.tasks[event.task_id]
-        task.status = TaskStatus.QUEUED
+        if task.status == TaskStatus.PENDING:
+            task.status = TaskStatus.QUEUED
+
         self._push_event(Event(
             time=self._current_time,
             sequence=self._next_sequence(),
@@ -96,15 +148,12 @@ class SimulationEngine:
 
     def _handle_schedule_tick(self, event: Event) -> None:
         """Run the scheduler and execute resulting assignments."""
-        queued_tasks = [
-            t for t in self.tasks.values()
-            if t.status == TaskStatus.QUEUED
-        ]
-        if not queued_tasks:
-            return
+        # Update scheduler time if it tracks it
+        if hasattr(self.scheduler, 'current_time'):
+            self.scheduler.current_time = self._current_time
 
         assignments = self.scheduler.schedule(
-            tasks=queued_tasks,
+            tasks=list(self.tasks.values()),
             workers=list(self.workers.values()),
             completed_task_ids=self._completed_task_ids,
         )
@@ -127,7 +176,7 @@ class SimulationEngine:
         task.assigned_worker = worker.id
         worker.assign_task(task.id, task.compute_cost)
 
-        # Resource contention: more load → slower execution (real CPU/memory contention)
+        # Resource contention: more load → slower execution
         load_ratio = worker.current_load / worker.cpu_capacity if worker.cpu_capacity > 0 else 0
         contention_factor = 1.0 + 0.3 * load_ratio
 
@@ -138,7 +187,7 @@ class SimulationEngine:
         # Correlated failure: combine task risk with worker reliability
         worker_rel = self.worker_reliability.get(worker.id, 1.0)
         combined_failure_prob = task.failure_probability + (1.0 - worker_rel) * 0.3
-        combined_failure_prob = min(combined_failure_prob, 0.95)  # cap at 95%
+        combined_failure_prob = min(combined_failure_prob, 0.95)
 
         will_fail = self.rng.random() < combined_failure_prob
 
@@ -161,16 +210,20 @@ class SimulationEngine:
             ))
 
     def _handle_task_completion(self, event: Event) -> None:
-        """Mark COMPLETED, free worker, improve worker reliability, trigger scheduling."""
+        """Mark COMPLETED, free worker, improve reliability, trigger scheduling."""
         task = self.tasks[event.task_id]
         worker = self.workers[event.worker_id]
+
+        # Guard: skip if task was already preempted (worker died mid-execution)
+        if task.status != TaskStatus.RUNNING:
+            return
 
         task.status = TaskStatus.COMPLETED
         task.completion_time = self._current_time
         worker.release_task(task.id, task.compute_cost)
         self._completed_task_ids.add(task.id)
 
-        # Worker reliability slowly recovers on successful execution
+        # Worker reliability slowly recovers on success
         rel = self.worker_reliability.get(worker.id, 1.0)
         self.worker_reliability[worker.id] = min(1.0, rel * 1.05)
 
@@ -190,17 +243,21 @@ class SimulationEngine:
         task = self.tasks[event.task_id]
         worker = self.workers[event.worker_id]
 
+        # Guard: skip if task was already preempted
+        if task.status != TaskStatus.RUNNING:
+            return
+
         worker.release_task(task.id, task.compute_cost)
 
-        # Degrade worker reliability (hardware failure correlation)
+        # Degrade worker reliability
         rel = self.worker_reliability.get(worker.id, 1.0)
         self.worker_reliability[worker.id] = max(0.1, rel * 0.85)
 
         task.retry_count += 1
 
         if task.retry_count < task.max_retries:
-            # Re-queue with exponential backoff (like K8s CrashLoopBackOff)
-            backoff = 2.0 * (2 ** (task.retry_count - 1))  # 2s, 4s, 8s...
+            # Re-queue with exponential backoff
+            backoff = 2.0 * (2 ** (task.retry_count - 1))
             task.status = TaskStatus.QUEUED
             task.assigned_worker = None
             task.start_time = None
@@ -222,12 +279,51 @@ class SimulationEngine:
             ))
 
     def _handle_worker_failure(self, event: Event) -> None:
-        """Mark worker DOWN. (Placeholder — full logic in Phase 4)"""
+        """Handle worker crash: preempt running tasks and reschedule.
+
+        This models Kubernetes node failure → pod eviction → rescheduling.
+        When a worker goes down:
+        1. All running tasks on that worker are preempted (re-queued)
+        2. Pending completion/failure events for those tasks become stale
+           (guarded by status checks in handlers)
+        3. Worker is marked DOWN (unavailable for scheduling)
+        4. Immediate rescheduling is triggered for rescued tasks
+        """
         worker = self.workers[event.worker_id]
         worker.status = WorkerStatus.DOWN
+        self.worker_failure_count += 1
+
+        # Heavily degrade worker reliability
+        self.worker_reliability[worker.id] = max(0.1,
+            self.worker_reliability.get(worker.id, 1.0) * 0.6)
+
+        # Preempt all running tasks on this worker
+        preempted_ids = list(worker.active_tasks)
+        for task_id in preempted_ids:
+            task = self.tasks[task_id]
+            if task.status == TaskStatus.RUNNING:
+                task.status = TaskStatus.QUEUED
+                task.assigned_worker = None
+                task.start_time = None
+                self.tasks_preempted += 1
+
+        # Clear worker state
+        worker.active_tasks = []
+        worker.current_load = 0.0
+
+        # Trigger immediate rescheduling for preempted tasks
+        if preempted_ids:
+            self._push_event(Event(
+                time=self._current_time,
+                sequence=self._next_sequence(),
+                event_type=EventType.SCHEDULE_TICK,
+            ))
 
     def _handle_worker_recovery(self, event: Event) -> None:
-        """Restore worker to IDLE and trigger scheduling."""
+        """Restore worker to IDLE and trigger scheduling.
+
+        Models node coming back online after maintenance/reboot.
+        """
         worker = self.workers[event.worker_id]
         worker.status = WorkerStatus.IDLE
         worker.current_load = 0.0
@@ -238,6 +334,10 @@ class SimulationEngine:
             sequence=self._next_sequence(),
             event_type=EventType.SCHEDULE_TICK,
         ))
+
+    def _handle_sla_check(self, event: Event) -> None:
+        """Run periodic SLA risk check and log alerts."""
+        self.sla_monitor.check(self.tasks, self._current_time)
 
     # ── Utilities ─────────────────────────────────────────────────────
 

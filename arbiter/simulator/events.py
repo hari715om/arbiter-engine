@@ -13,6 +13,7 @@ class EventType(str, Enum):
     WORKER_FAILURE = "worker_failure"
     WORKER_RECOVERY = "worker_recovery"
     SCHEDULE_TICK = "schedule_tick"
+    SLA_RISK_CHECK = "sla_risk_check"
 
 
 @dataclass(order=True)
