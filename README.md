@@ -1,116 +1,142 @@
-# 🧠 Arbiter Engine
+# Arbiter Engine
 
-**An AI-driven intelligent scheduling and resource allocation engine.**
+An intelligent, production-ready distributed task scheduling system built from the ground up in Python.
 
-Arbiter Engine is a decision engine that answers: *Which task should run next? On which worker? In what order? With what expected cost?*
+## What it is
 
-It integrates **heuristic search**, **ML-based runtime prediction**, **utility-based multi-objective optimization**, and **failure-resilient replanning** to optimize distributed task allocation under resource constraints.
+Arbiter Engine is a **real scheduling system** — not a simulation toy. It exposes a REST API, persists state in PostgreSQL, runs background workers via Celery, and ships with five scheduling algorithms including a custom DQN reinforcement learning scheduler.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                      Arbiter Engine                       │
-├───────────────┬──────────────────┬───────────────────────┤
-│    Models     │    Schedulers    │      Simulator         │
-│  Task         │  FIFO            │  Event Engine          │
-│  Worker       │  Heuristic       │  Task Generator        │
-│               │  ML-Enhanced     │  Failure Injection     │
-│               │  Utility-Based   │  SLA Monitoring        │
-├───────────────┴──────────────────┴───────────────────────┤
-│              ML Predictor Layer                            │
-│  Runtime Prediction │ Failure Classification               │
-├──────────────────────────────────────────────────────────┤
-│              Utility Optimization Layer                    │
-│  Latency │ Throughput │ Fairness │ Cost │ Risk             │
-├──────────────────────────────────────────────────────────┤
-│              Metrics & Observability                       │
-│  Jain's Fairness │ SLA Compliance │ Cost Efficiency        │
-└──────────────────────────────────────────────────────────┘
-```
-
-## Quick Start
-
-```bash
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # Linux/Mac
-
-# Install dependencies
-pip install -e ".[dev]"
-
-# Run tests (109 tests)
-python -m pytest tests/ -v
-
-# Run a simulation
-python scripts/run_simulation.py --tasks 50 --workers 5 --scheduler fifo
-
-# Compare all 4 schedulers
-python scripts/compare_schedulers.py --tasks 100 --workers 5
-
-# Compare with failure injection
-python scripts/compare_schedulers.py --tasks 100 --workers 5 --failure-mode random
-
-# Run comprehensive 6-scenario evaluation
-python scripts/evaluation_report.py
-
-# Train ML models
-python scripts/train_models.py --simulations 50 --tasks 100
-```
-
-## Project Structure
-
-```
-arbiter-engine/
-├── arbiter/
-│   ├── models/         # Task & Worker data models
-│   ├── schedulers/     # Scheduling algorithms (FIFO, Heuristic, ML, Utility)
-│   ├── ml/             # ML pipeline (training data, models)
-│   ├── simulator/      # Event-driven engine, failure injection, SLA monitoring
-│   └── metrics/        # Performance metrics & fairness index
-├── tests/              # 109 unit & integration tests
-├── scripts/            # CLI entry points & benchmarking
-├── docs/               # Architecture deep-dive
-└── pyproject.toml      # Project configuration
+                   ┌──────────────────────────────────────┐
+                   │           FastAPI REST API            │
+                   │  /tasks  /workers  /schedule /metrics │
+                   │  /health  /events  /ws/events         │
+                   └────────────┬─────────────┬────────────┘
+                                │             │
+              ┌─────────────────▼──┐   ┌──────▼──────────────┐
+              │  PostgreSQL (state) │   │  Redis (task queue)  │
+              └─────────────────┬──┘   └──────┬──────────────┘
+                                │             │
+                    ┌───────────▼─────────────▼──────────┐
+                    │         Celery Worker Pool           │
+                    │  schedule_pending (beat: 5s)         │
+                    │  mark_task_completed                 │
+                    └───────────────┬────────────────────-┘
+                                    │
+                    ┌──────────────-▼────────────────────--┐
+                    │          Scheduler Engine             │
+                    │  FIFO │ Heuristic │ Utility │ RL │ Meta│
+                    └───────────────────────────────────────┘
 ```
 
 ## Schedulers
 
-| Scheduler | Approach | Best For |
-|-----------|----------|----------|
-| **FIFO** | First-come, first-served | Baseline, predictable ordering |
-| **Heuristic** | Multi-factor scoring (priority, urgency, unlock potential) | Low latency, SLA compliance |
-| **ML-Enhanced** | Heuristic + ML-predicted runtime & failure risk | Data-driven environments |
-| **Utility** | 5-objective weighted optimization (latency, throughput, fairness, cost, risk) | Failure-resilient, high completion rate |
+| Scheduler | Technique | Best For |
+|-----------|-----------|----------|
+| FIFO | First-in, first-out | Baseline / fairness |
+| Heuristic | Priority + deadline + dependency unlock | DAG workloads |
+| ML | Random Forest latency prediction | Pattern-heavy workloads |
+| Utility | Composable multi-objective optimization | General purpose |
+| **RL** | Custom DQN (numpy, no PyTorch) | Adaptive learning |
+| **Meta** | Workload fingerprinting + strategy selection | Mixed workloads |
 
-## Benchmark Highlights
+## Quick Start
 
-100 tasks, 5 workers — Utility scheduler dominance under failures:
+**Local (requires PostgreSQL + Redis running):**
+```bash
+git clone https://github.com/you/arbiter-engine
+cd arbiter-engine
+python -m venv venv && venv\Scripts\activate
+pip install -e ".[dev]"
+arbiter-serve        # starts FastAPI on :8000
+```
 
-| Scenario | FIFO | Heuristic | Utility |
-|----------|------|-----------|---------|
-| Normal | 66 done | 57 done | **69 done** |
-| Random Failures | 67 done | 54 done | **95 done** |
-| Burst Failures | 45 done | 50 done | **66 done** |
+**Docker (full stack):**
+```bash
+docker compose up
+```
+Starts: PostgreSQL + Redis + API + Celery Worker + Celery Beat
 
-Under random failures, Utility completes **42% more tasks** than FIFO and **76% more** than Heuristic by systematically accounting for risk and capacity fit.
+**API Docs:** http://localhost:8000/docs
 
-## Development Phases
+## API Endpoints
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| 0 | ✅ | Project setup |
-| 1 | ✅ | Core simulation (Task/Worker models, FIFO, Event engine) |
-| 2 | ✅ | Heuristic scheduler (multi-factor scoring) |
-| 3 | ✅ | ML integration (runtime prediction, failure classification) |
-| 3.5 | ✅ | Realistic simulation (retries, contention, correlated failures) |
-| 4 | ✅ | Failure injection & dynamic replanning |
-| 5 | ✅ | Utility-based multi-objective optimization |
-| 6 | ✅ | Observability & benchmarking |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/tasks` | Submit a task |
+| GET | `/tasks/{id}` | Get task status |
+| GET | `/tasks?status=pending` | List tasks with filter |
+| DELETE | `/tasks/{id}` | Delete a task |
+| POST | `/workers` | Register a worker |
+| GET | `/workers` | List workers |
+| POST | `/workers/{id}/heartbeat` | Worker health ping |
+| POST | `/schedule` | Trigger scheduling cycle |
+| GET | `/metrics` | JSON metrics snapshot |
+| GET | `/metrics/prometheus` | Prometheus scrape endpoint |
+| GET | `/health` | DB + Redis health check |
+| GET | `/events` | Audit event log |
+| WS | `/ws/events` | Real-time event stream |
 
-See [docs/architecture.md](docs/architecture.md) for a comprehensive deep-dive.
+## Observability
 
-## License
+- **Prometheus:** scrape `/metrics/prometheus` — 8 custom collectors (task counters, latency histogram, SLA violations, queue depth, worker utilization)
+- **Event Log:** every scheduling decision written to `event_log` table
+- **WebSocket:** `/ws/events` for live dashboard integration
+- **Heartbeat Monitor:** background thread detects worker failures via configurable timeout
 
-MIT
+## Novelty Features
+
+### Custom DQN Scheduler
+No PyTorch/TensorFlow dependency. Pure numpy 2-layer Q-network with replay buffer (10K capacity), epsilon-greedy exploration, and target network sync every 100 steps. Learns from a 68-dimensional observation vector encoding task urgency, worker capacity, and reliability.
+
+### Adaptive Meta-Scheduler
+Computes a 5-dimensional **workload fingerprint** (burstiness, priority skew, failure rate, dependency density, deadline tightness) and dynamically selects the best scheduling strategy. Logs all strategy switches with reasons.
+
+### Explainable Scheduling
+Every assignment is explainable: per-objective score contributions, human-readable reasoning string, and ranked alternative assignments.
+
+### Synthetic Trace Generator
+Generates realistic bursty workloads with Poisson + burst arrival patterns, priority distributions, dependency chains, and heterogeneous workers. Also loads real CSV cluster traces.
+
+## Execution Backends
+
+| Mode | Description |
+|------|-------------|
+| `simulated` | Fast time-delayed execution (default) |
+| `docker` | Real containers with resource limits (0.5 CPU, 512MB) |
+
+## Testing
+
+```bash
+pytest tests/ -q          # 173 tests
+pytest tests/ --cov=arbiter --cov-report=term
+```
+
+**Test breakdown:**
+- 109 core scheduler/simulation tests
+- 22 API endpoint tests (SQLite in-memory, no PostgreSQL required)
+- 15 execution + heartbeat + prometheus tests  
+- 27 RL + meta-scheduler + explainer + trace tests
+
+## Configuration
+
+All settings via environment variables prefixed `ARBITER_`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ARBITER_DATABASE_URL` | `postgresql+psycopg://...` | PostgreSQL connection |
+| `ARBITER_REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
+| `ARBITER_SCHEDULER_TYPE` | `utility` | Active scheduler |
+| `ARBITER_EXECUTION_MODE` | `simulated` | `simulated` or `docker` |
+| `ARBITER_SCHEDULE_INTERVAL` | `5.0` | Celery beat interval (seconds) |
+
+## RL Training
+
+```bash
+python scripts/train_rl_scheduler.py --episodes 100 --tasks 200 --workers 10
+# model saved to models/rl_policy.json, auto-loaded on next start
+```
+
+
