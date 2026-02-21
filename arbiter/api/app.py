@@ -349,6 +349,17 @@ def list_events(limit: int = Query(50, ge=1, le=500), db: Session = Depends(get_
     ]
 
 
+# -- prometheus --
+
+@app.get("/metrics/prometheus")
+def prometheus_metrics():
+    from fastapi.responses import Response
+    from arbiter.metrics.prometheus import get_metrics_output
+    body, content_type = get_metrics_output()
+    return Response(content=body, media_type=content_type)
+
+
+
 # -- websocket --
 
 @app.websocket("/ws/events")
