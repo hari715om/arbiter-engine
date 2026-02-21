@@ -14,6 +14,7 @@ from arbiter.models.task import Task
 from arbiter.models.worker import Worker
 from arbiter.schedulers.fifo import FIFOScheduler
 from arbiter.schedulers.heuristic import HeuristicScheduler
+from arbiter.schedulers.ml_scheduler import MLScheduler
 from arbiter.simulator.generator import ScenarioGenerator
 from arbiter.simulator.engine import SimulationEngine
 
@@ -28,12 +29,19 @@ except ImportError:
 
 def get_scheduler(name: str):
     """Factory function to get a scheduler by name."""
+    if name.lower() == "ml":
+        from pathlib import Path
+        model_dir = Path("models")
+        if model_dir.exists():
+            return MLScheduler.from_model_dir(str(model_dir))
+        return MLScheduler()
+
     schedulers = {
         "fifo": FIFOScheduler,
         "heuristic": HeuristicScheduler,
     }
     if name.lower() not in schedulers:
-        available = ", ".join(schedulers.keys())
+        available = "fifo, heuristic, ml"
         raise ValueError(f"Unknown scheduler: {name}. Available: {available}")
     return schedulers[name.lower()]()
 

@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from arbiter.schedulers.fifo import FIFOScheduler
 from arbiter.schedulers.heuristic import HeuristicScheduler
+from arbiter.schedulers.ml_scheduler import MLScheduler
 from arbiter.simulator.generator import ScenarioGenerator
 from arbiter.simulator.engine import SimulationEngine
 from arbiter.metrics.collector import MetricsReport
@@ -35,50 +36,89 @@ def run_with_scheduler(scheduler, tasks, workers, seed):
     return metrics.report
 
 
-def print_comparison(fifo_report: MetricsReport, heuristic_report: MetricsReport):
-    """Print side-by-side comparison of two scheduler runs."""
-    f, h = fifo_report, heuristic_report
+def get_ml_scheduler():
+    """Load ML scheduler with pre-trained models if available."""
+    from pathlib import Path
+    model_dir = Path("models")
+    if model_dir.exists():
+        return MLScheduler.from_model_dir(str(model_dir))
+    return MLScheduler()
 
-    def delta(new, old, lower_better=True):
-        if old == 0:
+
+def print_comparison(reports: dict[str, MetricsReport]):
+    """Print side-by-side comparison of scheduler runs."""
+    names = list(reports.keys())
+
+    def fmt_delta(new, baseline, lower_better=True):
+        if baseline == 0:
             return ""
-        diff = new - old
-        pct = (diff / old) * 100 if old != 0 else 0
-        sign = "+" if diff > 0 else ""
-        color = "red" if (diff > 0 and lower_better) or (diff < 0 and not lower_better) else "green"
+        pct = ((new - baseline) / baseline) * 100
+        sign = "+" if pct > 0 else ""
+        color = "red" if (pct > 0 and lower_better) or (pct < 0 and not lower_better) else "green"
         return f"[{color}]{sign}{pct:.1f}%[/]" if HAS_RICH else f"{sign}{pct:.1f}%"
 
-    rows = [
-        ("Tasks Completed", f.tasks_completed, h.tasks_completed, delta(h.tasks_completed, f.tasks_completed, lower_better=False)),
-        ("Tasks Failed", f.tasks_failed, h.tasks_failed, delta(h.tasks_failed, f.tasks_failed)),
-        ("Tasks Pending", f.tasks_pending, h.tasks_pending, delta(h.tasks_pending, f.tasks_pending)),
-        ("Avg Completion Time", f"{f.avg_completion_time:.2f}", f"{h.avg_completion_time:.2f}", delta(h.avg_completion_time, f.avg_completion_time)),
-        ("P95 Latency", f"{f.p95_latency:.2f}", f"{h.p95_latency:.2f}", delta(h.p95_latency, f.p95_latency)),
-        ("Throughput", f"{f.throughput:.4f}", f"{h.throughput:.4f}", delta(h.throughput, f.throughput, lower_better=False)),
-        ("SLA Violation Rate", f"{f.sla_violation_rate:.1%}", f"{h.sla_violation_rate:.1%}", delta(h.sla_violation_rate, f.sla_violation_rate)),
-        ("Failure Rate", f"{f.failure_rate:.1%}", f"{h.failure_rate:.1%}", delta(h.failure_rate, f.failure_rate)),
-        ("Avg Utilization", f"{f.avg_worker_utilization:.1%}", f"{h.avg_worker_utilization:.1%}", delta(h.avg_worker_utilization, f.avg_worker_utilization, lower_better=False)),
+    # Build metric rows: (name, extract_fn, lower_better)
+    metric_defs = [
+        ("Tasks Completed", lambda r: r.tasks_completed, False),
+        ("Tasks Failed", lambda r: r.tasks_failed, True),
+        ("Tasks Pending", lambda r: r.tasks_pending, True),
+        ("Avg Completion Time", lambda r: r.avg_completion_time, True),
+        ("P95 Latency", lambda r: r.p95_latency, True),
+        ("Throughput", lambda r: r.throughput, False),
+        ("SLA Violation Rate", lambda r: r.sla_violation_rate, True),
+        ("Failure Rate", lambda r: r.failure_rate, True),
+        ("Avg Utilization", lambda r: r.avg_worker_utilization, False),
     ]
 
+    def fmt_val(val, is_rate=False, is_pct=False):
+        if isinstance(val, int):
+            return str(val)
+        if is_pct or is_rate:
+            return f"{val:.1%}"
+        return f"{val:.4f}" if val < 1 else f"{val:.2f}"
+
+    rate_metrics = {"SLA Violation Rate", "Failure Rate", "Avg Utilization"}
+    baseline = reports[names[0]]
+
     if HAS_RICH:
-        table = Table(title="FIFO vs Heuristic Scheduler", border_style="cyan")
+        title = " vs ".join(names)
+        table = Table(title=title, border_style="cyan")
         table.add_column("Metric", style="bold")
-        table.add_column("FIFO", justify="right")
-        table.add_column("Heuristic", justify="right")
-        table.add_column("Change", justify="right")
-        for name, fifo_val, heur_val, change in rows:
-            table.add_row(name, str(fifo_val), str(heur_val), change)
+        for name in names:
+            table.add_column(name, justify="right")
+        if len(names) > 1:
+            for name in names[1:]:
+                table.add_column(f"Δ vs {names[0]}", justify="right")
+
+        for metric_name, extract_fn, lower_better in metric_defs:
+            is_rate = metric_name in rate_metrics
+            row = [metric_name]
+            vals = {n: extract_fn(reports[n]) for n in names}
+            for n in names:
+                row.append(fmt_val(vals[n], is_rate=is_rate))
+            for n in names[1:]:
+                row.append(fmt_delta(vals[n], vals[names[0]], lower_better))
+            table.add_row(*row)
+
         console.print(table)
     else:
-        print(f"\n{'Metric':<25} {'FIFO':>12} {'Heuristic':>12} {'Change':>10}")
-        print("-" * 65)
-        for name, fifo_val, heur_val, change in rows:
-            print(f"{name:<25} {str(fifo_val):>12} {str(heur_val):>12} {change:>10}")
+        header = f"{'Metric':<25}"
+        for n in names:
+            header += f" {n:>12}"
+        print(f"\n{header}")
+        print("-" * (25 + 13 * len(names)))
+        for metric_name, extract_fn, lower_better in metric_defs:
+            is_rate = metric_name in rate_metrics
+            line = f"{metric_name:<25}"
+            vals = {n: extract_fn(reports[n]) for n in names}
+            for n in names:
+                line += f" {fmt_val(vals[n], is_rate=is_rate):>12}"
+            print(line)
         print()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare FIFO vs Heuristic schedulers")
+    parser = argparse.ArgumentParser(description="Compare FIFO vs Heuristic vs ML schedulers")
     parser.add_argument("--tasks", type=int, default=100, help="Number of tasks (default: 100)")
     parser.add_argument("--workers", type=int, default=5, help="Number of workers (default: 5)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
@@ -87,7 +127,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Generate ONE scenario — same for both schedulers
     gen = ScenarioGenerator(seed=args.seed)
     tasks = gen.generate_tasks(
         num_tasks=args.tasks,
@@ -99,10 +138,13 @@ def main():
     if HAS_RICH:
         console.print(f"[bold]Scenario:[/bold] {len(tasks)} tasks, {len(workers)} workers, seed={args.seed}\n")
 
-    fifo_report = run_with_scheduler(FIFOScheduler(), tasks, workers, args.seed)
-    heuristic_report = run_with_scheduler(HeuristicScheduler(), tasks, workers, args.seed)
+    reports = {
+        "FIFO": run_with_scheduler(FIFOScheduler(), tasks, workers, args.seed),
+        "Heuristic": run_with_scheduler(HeuristicScheduler(), tasks, workers, args.seed),
+        "ML": run_with_scheduler(get_ml_scheduler(), tasks, workers, args.seed),
+    }
 
-    print_comparison(fifo_report, heuristic_report)
+    print_comparison(reports)
 
 
 if __name__ == "__main__":
