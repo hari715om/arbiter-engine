@@ -1,0 +1,73 @@
+﻿Scenario: 100 tasks, 5 workers, seed=42
+
+                      FIFO vs Heuristic vs ML vs Utility                       
++-----------------------------------------------------------------------------+
+c:\Projects\arbiter-engine\venv\Scripts\py
+thon.exe : Traceback (most recent call 
+last):
+At line:1 char:1
++ c:\Projects\arbiter-engine\venv\Scripts\
+python.exe scripts/compare_sc ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecifie 
+   d: (Traceback (most recent call last)  
+  ::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeComma 
+   ndError
+ 
+  File "C:\Projects\arbiter-engine\scripts
+\compare_schedulers.py", line 175, in 
+<module>
+    main()
+  File "C:\Projects\arbiter-engine\scripts
+\compare_schedulers.py", line 171, in main
+    print_comparison(reports)
+  File "C:\Projects\arbiter-engine\scripts
+\compare_schedulers.py", line 111, in 
+print_comparison
+    console.print(table)
+  File "C:\Projects\arbiter-engine\venv\Li
+b\site-packages\rich\console.py", line 
+1697, in print
+    with self:
+         ^^^^
+  File "C:\Projects\arbiter-engine\venv\Li
+b\site-packages\rich\console.py", line 
+870, in __exit__
+    self._exit_buffer()
+  File "C:\Projects\arbiter-engine\venv\Li
+b\site-packages\rich\console.py", line 
+826, in _exit_buffer
+    self._check_buffer()
+  File "C:\Projects\arbiter-engine\venv\Li
+b\site-packages\rich\console.py", line 
+2042, in _check_buffer
+    self._write_buffer()
+  File "C:\Projects\arbiter-engine\venv\Li
+b\site-packages\rich\console.py", line 
+2078, in _write_buffer
+    legacy_windows_render(buffer, 
+LegacyWindowsTerm(self.file))
+  File "C:\Projects\arbiter-engine\venv\Li
+b\site-packages\rich\_windows_renderer.py"
+, line 17, in legacy_windows_render
+    term.write_styled(text, style)
+  File "C:\Projects\arbiter-engine\venv\Li
+b\site-packages\rich\_win32_console.py", 
+line 441, in write_styled
+    self.write_text(text)
+  File "C:\Projects\arbiter-engine\venv\Li
+b\site-packages\rich\_win32_console.py", 
+line 402, in write_text
+    self.write(text)
+  File "C:\Users\KIIT0001\miniconda3\Lib\e
+ncodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,sel
+f.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't 
+encode character '\u0394' in position 3: 
+character maps to <undefined>
+|         |        |         |        |         | 
