@@ -3,6 +3,7 @@ import MetricsPanel from './components/MetricsPanel'
 import WorkerHeatmap from './components/WorkerHeatmap'
 import TaskTimeline from './components/TaskTimeline'
 import ExplainPanel from './components/ExplainPanel'
+import DagView from './components/DagView'
 
 const API = '/api'
 
@@ -11,6 +12,7 @@ export default function App() {
     const [wsStatus, setWsStatus] = useState<'connecting' | 'live' | 'offline'>('connecting')
     const wsRef = useRef<WebSocket | null>(null)
     const [events, setEvents] = useState<any[]>([])
+    const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>(undefined)
 
     // WebSocket connection for live events
     useEffect(() => {
@@ -61,7 +63,8 @@ export default function App() {
                 <MetricsPanel apiBase={API} className="area-metrics card" />
                 <WorkerHeatmap apiBase={API} className="area-workers card" />
                 <TaskTimeline apiBase={API} events={events} className="area-timeline card" />
-                <ExplainPanel apiBase={API} className="area-explain card" />
+                <ExplainPanel apiBase={API} className="area-explain card" taskId={selectedTaskId} />
+                <DagView onSelectTask={(id) => setSelectedTaskId(id)} />
             </main>
         </div>
     )

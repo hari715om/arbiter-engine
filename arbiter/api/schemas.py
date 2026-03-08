@@ -30,6 +30,7 @@ class TaskResponse(BaseModel):
     start_time: Optional[float]
     completion_time: Optional[float]
     created_at: Optional[datetime]
+    tenant_id: str = "default"
 
 
 class WorkerCreate(BaseModel):
@@ -49,6 +50,7 @@ class WorkerResponse(BaseModel):
     current_load: float
     supported_resources: list[str]
     last_heartbeat: Optional[datetime]
+    tenant_id: str = "default"
 
 
 class MetricsSnapshot(BaseModel):
@@ -83,16 +85,16 @@ class EventResponse(BaseModel):
 class AlternativeAssignment(BaseModel):
     worker_id: str
     score: float
-    breakdown: dict[str, float]   
+    breakdown: dict[str, float]
 
 
 class ExplanationResponse(BaseModel):
 
     task_id: str
-    worker_id: Optional[str]       
+    worker_id: Optional[str]
     scheduler_name: str
     total_score: float
-    factors: dict[str, float]      
+    factors: dict[str, float]
     reasoning: str
     alternatives: list[AlternativeAssignment]
 
@@ -124,6 +126,5 @@ class ChaosRequest(BaseModel):
 
 class ChaosResponse(BaseModel):
     mode: str
-    affected: list[str]          
+    affected: list[str]
     message: str
-

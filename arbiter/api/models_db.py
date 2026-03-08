@@ -27,6 +27,7 @@ class TaskRecord(Base):
     max_retries = Column(Integer, default=2)
     dependencies = Column(Text, default="")  # comma-separated task IDs
     webhook_url = Column(Text, nullable=True)  # POST to this URL on completion
+    tenant_id = Column(String, default="default", nullable=False, index=True)  # Feature 1: multi-tenancy
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
@@ -42,6 +43,7 @@ class WorkerRecord(Base):
     current_load = Column(Float, default=0.0)
     supported_resources = Column(Text, default="cpu,gpu,memory")
     last_heartbeat = Column(DateTime, nullable=True)
+    tenant_id = Column(String, default="default", nullable=False, index=True)  # Feature 1: multi-tenancy
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     tasks = relationship("TaskRecord", backref="worker", lazy="selectin")
 

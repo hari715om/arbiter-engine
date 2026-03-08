@@ -26,22 +26,80 @@ log = get_logger(__name__)
 START_TIME = time.time()
 _ws_clients: list[WebSocket] = []
 
+# ── Fix 3: Rate Limiting via slowapi ──────────────────────────────────────────
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    _HAS_SLOWAPI = True
+except ImportError:
+    _HAS_SLOWAPI = False
+
+if _HAS_SLOWAPI:
+    limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+else:
+    limiter = None
+
+# ── Fix 2: Async Heartbeat Monitor ───────────────────────────────────────────
+from arbiter.execution.heartbeat import AsyncHeartbeatMonitor
+_heartbeat_monitor: Optional[AsyncHeartbeatMonitor] = None
+
+
+async def _handle_worker_failure(worker_id: str):
+    """Called by AsyncHeartbeatMonitor when a worker misses its heartbeat."""
+    from arbiter.api.models_db import SessionLocal
+    db = SessionLocal()
+    try:
+        wr = db.query(WorkerRecord).filter_by(id=worker_id).first()
+        if wr and wr.status != "down":
+            wr.status = "down"
+            running = db.query(TaskRecord).filter_by(
+                assigned_worker=worker_id, status="running"
+            ).all()
+            for tr in running:
+                tr.status = "queued"
+                tr.assigned_worker = None
+            _log_event(db, "WORKER_FAILED", worker_id=worker_id,
+                       detail=f"heartbeat timeout, {len(running)} tasks preempted")
+            db.commit()
+            log.warning("worker_failed_heartbeat", worker_id=worker_id,
+                        tasks_preempted=len(running))
+    finally:
+        db.close()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _heartbeat_monitor
     log.info("arbiter_startup", scheduler=settings.scheduler_type,
              db_url=settings.database_url.split("@")[-1])  # mask credentials
     init_db()
+
+    # Start async heartbeat monitor
+    _heartbeat_monitor = AsyncHeartbeatMonitor(
+        timeout=30.0, on_failure=_handle_worker_failure
+    )
+    await _heartbeat_monitor.start(interval=10.0)
+
     yield
+
+    # Graceful shutdown
+    if _heartbeat_monitor:
+        await _heartbeat_monitor.stop()
     log.info("arbiter_shutdown")
 
 
 app = FastAPI(
     title="Arbiter Engine",
     description="Intelligent task scheduling API — multi-objective, observable, production-ready.",
-    version="0.7.0",
+    version="0.8.0",
     lifespan=lifespan,
 )
+
+# Wire rate limiter if available
+if _HAS_SLOWAPI:
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS: allow the React dashboard (port 5173) and anything in development
 app.add_middleware(
@@ -75,6 +133,11 @@ async def request_id_middleware(request: Request, call_next):
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+def _get_tenant(request: Request) -> str:
+    """Extract tenant ID from X-Tenant-ID header (default='default')."""
+    return request.headers.get("X-Tenant-ID", "default")
+
+
 def _task_to_response(rec: TaskRecord) -> TaskResponse:
     deps = [d.strip() for d in rec.dependencies.split(",") if d.strip()] if rec.dependencies else []
     return TaskResponse(
@@ -91,6 +154,7 @@ def _task_to_response(rec: TaskRecord) -> TaskResponse:
         start_time=rec.start_time,
         completion_time=rec.completion_time,
         created_at=rec.created_at,
+        tenant_id=rec.tenant_id,
     )
 
 
@@ -105,6 +169,7 @@ def _worker_to_response(rec: WorkerRecord) -> WorkerResponse:
         current_load=rec.current_load,
         supported_resources=resources,
         last_heartbeat=rec.last_heartbeat,
+        tenant_id=rec.tenant_id,
     )
 
 
@@ -136,7 +201,8 @@ async def _broadcast(event: dict):
 # ── task endpoints ─────────────────────────────────────────────────────────────
 
 @app.post("/tasks", response_model=TaskResponse, status_code=201)
-def create_task(body: TaskCreate, db: Session = Depends(get_db)):
+def create_task(request: Request, body: TaskCreate, db: Session = Depends(get_db)):
+    tenant = _get_tenant(request)
     task_id = body.id or f"task-{uuid.uuid4().hex[:8]}"
     if db.query(TaskRecord).filter_by(id=task_id).first():
         raise HTTPException(400, f"Task {task_id} already exists")
@@ -152,15 +218,20 @@ def create_task(body: TaskCreate, db: Session = Depends(get_db)):
         max_retries=body.max_retries,
         dependencies=",".join(body.dependencies),
         webhook_url=body.webhook_url,
+        tenant_id=tenant,
     )
     db.add(rec)
     db.commit()
     db.refresh(rec)
 
     log.info("task_created", task_id=task_id, priority=body.priority,
-             deadline=body.deadline, has_webhook=bool(body.webhook_url))
+             deadline=body.deadline, tenant=tenant, has_webhook=bool(body.webhook_url))
     _log_event(db, "TASK_CREATED", task_id=task_id)
     return _task_to_response(rec)
+
+# Apply rate limit decorator if slowapi is available
+if _HAS_SLOWAPI:
+    create_task = limiter.limit("100/minute")(create_task)
 
 
 @app.get("/tasks/{task_id}", response_model=TaskResponse)
@@ -173,11 +244,13 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
 
 @app.get("/tasks", response_model=list[TaskResponse])
 def list_tasks(
+    request: Request,
     status: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
-    q = db.query(TaskRecord)
+    tenant = _get_tenant(request)
+    q = db.query(TaskRecord).filter_by(tenant_id=tenant)
     if status:
         q = q.filter(TaskRecord.status == status)
     q = q.order_by(TaskRecord.created_at.desc()).limit(limit)
@@ -244,6 +317,15 @@ def explain_task_assignment(task_id: str, db: Session = Depends(get_db)):
     scheduler = UtilityScheduler()
     scored: list[tuple[ArbiterWorker, float, dict[str, float]]] = []
 
+    # Build context for the utility function
+    context = {
+        "current_time": 0.0,
+        "workers": workers,
+        "round_capacity": {w.id: w.cpu_capacity - w.current_load for w in workers},
+        "worker_reliability": {},
+        "queue_depth": 1,
+    }
+
     for worker in workers:
         # Check capacity
         if worker.current_load + task.compute_cost > worker.cpu_capacity:
@@ -251,18 +333,10 @@ def explain_task_assignment(task_id: str, db: Session = Depends(get_db)):
         if task.resource_type not in worker.supported_resources:
             continue
 
-        # Compute per-objective breakdown
-        breakdown: dict[str, float] = {}
-        total = 0.0
-        for obj in scheduler._objectives:
-            try:
-                score = obj.score(task, worker)
-            except Exception:
-                score = 0.0
-            breakdown[obj.__class__.__name__] = round(score, 4)
-            total += score
-
-        scored.append((worker, round(total, 4), breakdown))
+        # Compute per-objective breakdown using the proper API
+        breakdown = scheduler.utility_fn.evaluate_breakdown(task, worker, context)
+        total = breakdown.pop("total", 0.0)
+        scored.append((worker, round(total, 4), {k: round(v, 4) for k, v in breakdown.items()}))
 
     if not scored:
         raise HTTPException(422, "No eligible workers — all at capacity or resource mismatch")
@@ -308,7 +382,8 @@ def explain_task_assignment(task_id: str, db: Session = Depends(get_db)):
 # ── worker endpoints ───────────────────────────────────────────────────────────
 
 @app.post("/workers", response_model=WorkerResponse, status_code=201)
-def register_worker(body: WorkerCreate, db: Session = Depends(get_db)):
+def register_worker(request: Request, body: WorkerCreate, db: Session = Depends(get_db)):
+    tenant = _get_tenant(request)
     worker_id = body.id or f"worker-{uuid.uuid4().hex[:6]}"
     if db.query(WorkerRecord).filter_by(id=worker_id).first():
         raise HTTPException(400, f"Worker {worker_id} already exists")
@@ -319,25 +394,27 @@ def register_worker(body: WorkerCreate, db: Session = Depends(get_db)):
         memory_capacity=body.memory_capacity,
         speed_multiplier=body.speed_multiplier,
         supported_resources=",".join(body.supported_resources),
+        tenant_id=tenant,
     )
     db.add(rec)
     db.commit()
     db.refresh(rec)
 
     log.info("worker_registered", worker_id=worker_id, cpu=body.cpu_capacity,
-             memory=body.memory_capacity)
+             memory=body.memory_capacity, tenant=tenant)
     _log_event(db, "WORKER_REGISTERED", worker_id=worker_id)
     return _worker_to_response(rec)
 
 
 @app.get("/workers", response_model=list[WorkerResponse])
-def list_workers(db: Session = Depends(get_db)):
-    recs = db.query(WorkerRecord).all()
+def list_workers(request: Request, db: Session = Depends(get_db)):
+    tenant = _get_tenant(request)
+    recs = db.query(WorkerRecord).filter_by(tenant_id=tenant).all()
     return [_worker_to_response(r) for r in recs]
 
 
 @app.post("/workers/{worker_id}/heartbeat")
-def worker_heartbeat(worker_id: str, db: Session = Depends(get_db)):
+async def worker_heartbeat(worker_id: str, db: Session = Depends(get_db)):
     import datetime
     rec = db.query(WorkerRecord).filter_by(id=worker_id).first()
     if not rec:
@@ -345,6 +422,11 @@ def worker_heartbeat(worker_id: str, db: Session = Depends(get_db)):
     rec.last_heartbeat = datetime.datetime.utcnow()
     rec.status = "idle" if rec.current_load == 0 else "busy"
     db.commit()
+
+    # Record in async heartbeat monitor
+    if _heartbeat_monitor:
+        await _heartbeat_monitor.record(worker_id)
+
     return {"status": "ok"}
 
 
@@ -474,7 +556,7 @@ def inject_chaos(body: ChaosRequest, db: Session = Depends(get_db)):
 # ── scheduling endpoint ────────────────────────────────────────────────────────
 
 @app.post("/schedule", response_model=list[dict])
-def trigger_schedule(db: Session = Depends(get_db)):
+def trigger_schedule(request: Request, db: Session = Depends(get_db)):
     from arbiter.models.task import Task as ArbiterTask, TaskStatus
     from arbiter.models.worker import Worker as ArbiterWorker, WorkerStatus
     from arbiter.schedulers.fifo import FIFOScheduler
@@ -556,6 +638,10 @@ def trigger_schedule(db: Session = Depends(get_db)):
 
     db.commit()
     return results
+
+# Apply rate limit to schedule trigger if slowapi is available
+if _HAS_SLOWAPI:
+    trigger_schedule = limiter.limit("10/minute")(trigger_schedule)
 
 
 # ── metrics ────────────────────────────────────────────────────────────────────

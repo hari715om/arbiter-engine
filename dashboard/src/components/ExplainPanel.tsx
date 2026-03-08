@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 interface AlternativeAssignment {
     worker_id: string
@@ -19,13 +19,21 @@ interface ExplanationResponse {
 interface Props {
     apiBase: string
     className?: string
+    taskId?: string  // optional: auto-fill from DagView click
 }
 
-export default function ExplainPanel({ apiBase, className = '' }: Props) {
-    const [taskId, setTaskId] = useState('')
+export default function ExplainPanel({ apiBase, className = '', taskId: propTaskId }: Props) {
+    const [taskId, setTaskId] = useState(propTaskId || '')
     const [loading, setLoading] = useState(false)
     const [result, setResult] = useState<ExplanationResponse | null>(null)
     const [error, setError] = useState<string | null>(null)
+
+    // Auto-fill from DagView click
+    useEffect(() => {
+        if (propTaskId && propTaskId !== taskId) {
+            setTaskId(propTaskId)
+        }
+    }, [propTaskId])
 
     const maxScore = result
         ? Math.max(...Object.values(result.factors), 0.001)

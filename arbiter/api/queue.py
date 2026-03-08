@@ -1,4 +1,5 @@
 import time
+import numpy as np
 from celery import Celery
 from arbiter.api.config import settings
 from arbiter.logging_config import get_logger
@@ -21,6 +22,9 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
+# ── online RL learning counter ─────────────────────────────────────────────────
+_online_step_counter = [0]
+
 
 def _fire_webhook(webhook_url: str, payload: dict) -> None:
     """POST task completion payload to the user-specified webhook URL."""
@@ -34,7 +38,12 @@ def _fire_webhook(webhook_url: str, payload: dict) -> None:
 
 @celery_app.task(name="arbiter.schedule_pending")
 def schedule_pending():
-    """Pull queued tasks from DB, run scheduler, persist assignments."""
+    """Pull queued tasks from DB, run scheduler, persist assignments.
+
+    Fix 1 (Group E): Uses SELECT ... FOR UPDATE SKIP LOCKED to prevent
+    concurrent Celery workers from double-assigning the same task.
+    On SQLite (tests), this degrades gracefully to a plain SELECT.
+    """
     from arbiter.api.models_db import SessionLocal, TaskRecord, WorkerRecord, AssignmentRecord
     from arbiter.api.app import _log_event
     from arbiter.models.task import Task as ArbiterTask, TaskStatus
@@ -43,9 +52,17 @@ def schedule_pending():
 
     db = SessionLocal()
     try:
-        task_recs = db.query(TaskRecord).filter(
-            TaskRecord.status.in_(["pending", "queued"])
-        ).all()
+        # ── FIX 1: SKIP LOCKED — safe concurrent scheduling ───────────────
+        # with_for_update(skip_locked=True) locks rows so other workers skip them.
+        # .limit(50) prevents full-table scan: each worker grabs ≤50 tasks/cycle.
+        # On SQLite, skip_locked is silently ignored (no row-level locking).
+        task_recs = (
+            db.query(TaskRecord)
+            .filter(TaskRecord.status.in_(["pending", "queued"]))
+            .with_for_update(skip_locked=True)
+            .limit(50)
+            .all()
+        )
         worker_recs = db.query(WorkerRecord).filter(
             WorkerRecord.status != "down"
         ).all()
@@ -54,6 +71,7 @@ def schedule_pending():
         }
 
         if not task_recs or not worker_recs:
+            db.commit()  # release any locks
             return {"assignments": 0}
 
         tasks = []
@@ -102,15 +120,25 @@ def schedule_pending():
             ))
             _log_event(db, "TASK_ASSIGNED", task_id=a.task_id, worker_id=a.worker_id)
 
+        # Single commit releases all row locks atomically
         db.commit()
         return {"assignments": len(assignments)}
+    except Exception as exc:
+        db.rollback()
+        log.error("schedule_pending_error", error=str(exc))
+        raise
     finally:
         db.close()
 
 
 @celery_app.task(name="arbiter.mark_completed")
-def mark_task_completed(task_id: str):
-    """Mark a task as completed, free the worker, and fire webhook if set."""
+def mark_task_completed(task_id: str, state_vec: list = None, action: int = None):
+    """Mark a task as completed, free the worker, and fire webhook if set.
+
+    Feature 3 (Group E): If state_vec and action are provided, performs
+    an online RL weight update using the real task outcome. Weights are
+    persisted to models/rl_policy.json every 50 completions.
+    """
     from arbiter.api.models_db import SessionLocal, TaskRecord, WorkerRecord
     from arbiter.api.app import _log_event
 
@@ -138,6 +166,34 @@ def mark_task_completed(task_id: str):
 
         log.info("task_completed", task_id=task_id,
                  worker_id=rec.assigned_worker, latency_s=round(latency, 2))
+
+        # ── Feature 3: Online RL weight Learning ──────────────────────────
+        if state_vec is not None and action is not None:
+            try:
+                from arbiter.schedulers.rl.rl_scheduler import RLScheduler
+                from arbiter.schedulers.rl.rl_env import compute_reward
+
+                rl = RLScheduler()  # loads existing weights
+                sla_violated = (rec.completion_time or 0) > rec.deadline
+                reward = compute_reward(
+                    completed=True,
+                    sla_violated=sla_violated,
+                    retry_count=rec.retry_count,
+                    fairness_bonus=0.0,
+                )
+                # Terminal state → dummy next state (zeros)
+                next_state = np.zeros(68, dtype=np.float32)
+                rl.update(
+                    np.array(state_vec, dtype=np.float32),
+                    action, reward, next_state, done=True,
+                )
+                _online_step_counter[0] += 1
+                if _online_step_counter[0] % 50 == 0:
+                    rl.save()
+                    log.info("rl_online_weights_saved",
+                             step=_online_step_counter[0])
+            except Exception as e:
+                log.warning("rl_online_update_failed", error=str(e))
 
         # Fire webhook if configured
         if rec.webhook_url:
