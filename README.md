@@ -1,10 +1,10 @@
 # Arbiter Engine
 
-An intelligent, production-ready distributed task scheduling system built from the ground up in Python.
+A task scheduling and execution system built to explore scheduling strategies, system observability, and distributed workload management.
 
 ## What it is
 
-Arbiter Engine is a **real scheduling system** — not a simulation toy. It exposes a REST API, persists state in PostgreSQL, runs background workers via Celery, and ships with five scheduling algorithms including a custom DQN reinforcement learning scheduler.
+Arbiter Engine is a fully functional distributed scheduling system. It exposes a REST API, persists state in PostgreSQL, runs background workers via Celery, and implements multiple scheduling algorithms ranging from classic FIFO to Utility-based and Reinforcement Learning approaches.
 
 ## Architecture
 
