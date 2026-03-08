@@ -76,6 +76,24 @@ SessionLocal = sessionmaker(bind=engine)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Lightweight migration: add missing columns to existing tables
+    # This prevents UndefinedColumn errors when new columns are added
+    # to SQLAlchemy models without a full DB wipe.
+    _ensure_column(engine, "tasks", "tenant_id", "VARCHAR DEFAULT 'default' NOT NULL")
+    _ensure_column(engine, "workers", "tenant_id", "VARCHAR DEFAULT 'default' NOT NULL")
+
+
+def _ensure_column(eng, table: str, column: str, col_def: str):
+    """Add a column to an existing table if it doesn't already exist."""
+    from sqlalchemy import text, inspect
+    insp = inspect(eng)
+    try:
+        existing = [c["name"] for c in insp.get_columns(table)]
+        if column not in existing:
+            with eng.begin() as conn:
+                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {col_def}'))
+    except Exception:
+        pass  # table doesn't exist yet, create_all will handle it
 
 
 def get_db():
