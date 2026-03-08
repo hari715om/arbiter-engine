@@ -1,5 +1,9 @@
+import time
 from celery import Celery
 from arbiter.api.config import settings
+from arbiter.logging_config import get_logger
+
+log = get_logger(__name__)
 
 celery_app = Celery(
     "arbiter",
@@ -16,6 +20,16 @@ celery_app.conf.update(
     task_track_started=True,
     broker_connection_retry_on_startup=True,
 )
+
+
+def _fire_webhook(webhook_url: str, payload: dict) -> None:
+    """POST task completion payload to the user-specified webhook URL."""
+    try:
+        import httpx
+        resp = httpx.post(webhook_url, json=payload, timeout=5.0)
+        log.info("webhook_fired", url=webhook_url, status=resp.status_code)
+    except Exception as e:
+        log.warning("webhook_failed", url=webhook_url, error=str(e))
 
 
 @celery_app.task(name="arbiter.schedule_pending")
@@ -65,6 +79,9 @@ def schedule_pending():
         scheduler = UtilityScheduler()
         assignments = scheduler.schedule(tasks, workers, completed_ids)
 
+        log.info("celery_schedule_pending", tasks=len(task_recs),
+                 workers=len(worker_recs), assignments=len(assignments))
+
         for a in assignments:
             tr = db.query(TaskRecord).filter_by(id=a.task_id).first()
             if tr:
@@ -93,19 +110,21 @@ def schedule_pending():
 
 @celery_app.task(name="arbiter.mark_completed")
 def mark_task_completed(task_id: str):
-    """Mark a task as completed and free the worker."""
+    """Mark a task as completed, free the worker, and fire webhook if set."""
     from arbiter.api.models_db import SessionLocal, TaskRecord, WorkerRecord
     from arbiter.api.app import _log_event
-    import time
 
     db = SessionLocal()
     try:
         rec = db.query(TaskRecord).filter_by(id=task_id).first()
         if not rec or rec.status != "running":
+            log.warning("mark_completed_skip", task_id=task_id,
+                        reason="not found or not running")
             return {"error": f"Task {task_id} not running"}
 
         rec.status = "completed"
         rec.completion_time = time.time()
+        latency = rec.completion_time - (rec.arrival_time or rec.completion_time)
 
         if rec.assigned_worker:
             wr = db.query(WorkerRecord).filter_by(id=rec.assigned_worker).first()
@@ -116,6 +135,20 @@ def mark_task_completed(task_id: str):
 
         _log_event(db, "TASK_COMPLETED", task_id=task_id, worker_id=rec.assigned_worker)
         db.commit()
+
+        log.info("task_completed", task_id=task_id,
+                 worker_id=rec.assigned_worker, latency_s=round(latency, 2))
+
+        # Fire webhook if configured
+        if rec.webhook_url:
+            _fire_webhook(rec.webhook_url, {
+                "event": "task.completed",
+                "task_id": task_id,
+                "worker_id": rec.assigned_worker,
+                "completion_time": rec.completion_time,
+                "latency_seconds": round(latency, 2),
+            })
+
         return {"status": "completed", "task_id": task_id}
     finally:
         db.close()

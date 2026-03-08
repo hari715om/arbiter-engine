@@ -13,6 +13,7 @@ class TaskCreate(BaseModel):
     estimated_duration: float = Field(gt=0)
     dependencies: list[str] = Field(default_factory=list)
     max_retries: int = Field(ge=0, default=2)
+    webhook_url: Optional[str] = None   # POST to this URL when task completes
 
 
 class TaskResponse(BaseModel):
@@ -56,6 +57,7 @@ class MetricsSnapshot(BaseModel):
     failed: int
     pending: int
     running: int
+    queue_depth: int
     avg_latency: Optional[float]
     sla_violation_rate: Optional[float]
     worker_count: int
@@ -76,3 +78,52 @@ class EventResponse(BaseModel):
     worker_id: Optional[str]
     timestamp: float
     detail: Optional[str]
+
+
+class AlternativeAssignment(BaseModel):
+    worker_id: str
+    score: float
+    breakdown: dict[str, float]   
+
+
+class ExplanationResponse(BaseModel):
+
+    task_id: str
+    worker_id: Optional[str]       
+    scheduler_name: str
+    total_score: float
+    factors: dict[str, float]      
+    reasoning: str
+    alternatives: list[AlternativeAssignment]
+
+
+
+class PolicyRule(BaseModel):
+    """One conditional scheduling rule."""
+    condition: str = Field(description="e.g. 'queue_depth > 100'")
+    use: str = Field(description="Scheduler name: fifo, heuristic, utility, ml, rl, meta")
+
+
+class PolicyResponse(BaseModel):
+    default_scheduler: str
+    rules: list[PolicyRule]
+    utility_weights: dict[str, float]
+
+
+
+class ChaosRequest(BaseModel):
+
+    mode: str = Field(description="kill_worker | delay_tasks | fail_rate_spike")
+    target: Optional[str] = Field(None, description="Worker ID (for kill_worker)")
+    intensity: float = Field(0.5, ge=0.0, le=1.0,
+                             description="Fraction of workers/tasks affected (0-1)")
+    duration_seconds: Optional[float] = Field(
+        None, description="Auto-recover after this many seconds (not yet implemented)"
+    )
+
+
+class ChaosResponse(BaseModel):
+    mode: str
+    affected: list[str]          
+    message: str
+

@@ -1,0 +1,27 @@
+# Arbiter Engine Default Scheduling Policy
+#
+# Edit this file and POST it to PUT /policy to hot-reload without restart.
+# Rules are evaluated top-to-bottom; first match wins.
+
+default_scheduler: utility
+
+rules:
+  # Under heavy load, use fast FIFO to drain quickly
+  - if: queue_depth > 200
+    use: fifo
+
+  # When failure rate spikes, use Utility (has risk objective)
+  - if: failure_rate > 0.4
+    use: utility
+
+  # If queue is deep but failures are low, use meta-scheduler
+  - if: queue_depth > 50
+    use: meta
+
+# Objective weights for UtilityScheduler
+utility_weights:
+  latency:    0.40
+  throughput: 0.25
+  fairness:   0.15
+  cost:       0.10
+  risk:       0.10

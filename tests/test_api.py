@@ -228,3 +228,115 @@ class TestHealth:
         data = resp.json()
         assert data["scheduler_type"] == "utility"
         assert data["uptime_seconds"] >= 0
+
+
+# -- policy CRUD --
+
+class TestPolicy:
+    def test_get_policy_default(self):
+        resp = client.get("/policy")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "default_scheduler" in data
+        assert "rules" in data
+        assert "utility_weights" in data
+        assert isinstance(data["utility_weights"], dict)
+
+    def test_put_policy_updates(self):
+        new_policy = {
+            "default_scheduler": "fifo",
+            "rules": [
+                {"condition": "queue_depth > 50", "use": "utility"}
+            ],
+            "utility_weights": {
+                "latency": 0.5, "throughput": 0.2,
+                "fairness": 0.1, "cost": 0.1, "risk": 0.1,
+            },
+        }
+        resp = client.put("/policy", json=new_policy)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["default_scheduler"] == "fifo"
+        assert len(data["rules"]) == 1
+
+    def test_put_policy_invalid_scheduler(self):
+        bad = {
+            "default_scheduler": "nonexistent_scheduler",
+            "rules": [],
+            "utility_weights": {
+                "latency": 0.5, "throughput": 0.2,
+                "fairness": 0.1, "cost": 0.1, "risk": 0.1,
+            },
+        }
+        resp = client.put("/policy", json=bad)
+        assert resp.status_code == 422
+
+
+# -- chaos mode --
+
+class TestChaos:
+    def _make_worker(self, wid, load=0.0):
+        client.post("/workers", json={
+            "id": wid, "cpu_capacity": 8.0,
+            "memory_capacity": 16.0,
+        })
+        # Manually set the load for kill + fail tests if needed
+        return wid
+
+    def _make_task(self, tid, status="pending"):
+        client.post("/tasks", json={
+            "id": tid, "compute_cost": 1.0,
+            "deadline": 100.0, "estimated_duration": 5.0,
+        })
+        return tid
+
+    def test_chaos_kill_worker_by_target(self):
+        self._make_worker("chaos-w1")
+        resp = client.post("/chaos", json={
+            "mode": "kill_worker",
+            "target": "chaos-w1",
+            "intensity": 1.0,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "chaos-w1" in data["affected"]
+        # verify worker is now down
+        wr = client.get("/workers").json()
+        w = next((w for w in wr if w["id"] == "chaos-w1"), None)
+        assert w and w["status"] == "down"
+
+    def test_chaos_kill_worker_missing_target(self):
+        resp = client.post("/chaos", json={
+            "mode": "kill_worker",
+            "target": "nonexistent-worker",
+            "intensity": 1.0,
+        })
+        assert resp.status_code == 404
+
+    def test_chaos_delay_tasks(self):
+        for i in range(3):
+            self._make_task(f"chaos-t{i}")
+        resp = client.post("/chaos", json={
+            "mode": "delay_tasks",
+            "intensity": 1.0,
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["affected"]) >= 1
+
+    def test_chaos_fail_rate_spike_no_running(self):
+        """When no tasks are running, affected list should be empty."""
+        resp = client.post("/chaos", json={
+            "mode": "fail_rate_spike",
+            "intensity": 1.0,
+        })
+        assert resp.status_code == 200
+        assert resp.json()["affected"] == []
+
+    def test_chaos_invalid_mode(self):
+        resp = client.post("/chaos", json={
+            "mode": "destroy_everything",
+            "intensity": 1.0,
+        })
+        assert resp.status_code == 422
+

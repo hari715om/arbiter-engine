@@ -1,9 +1,10 @@
 import time
-import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+from arbiter.logging_config import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -54,7 +55,7 @@ class SimulatedExecutor(BaseExecutor):
         )
 
     def cancel(self, task_id: str) -> bool:
-        logger.info("Cancelled simulated task %s", task_id)
+        log.info("task_cancelled", task_id=task_id, executor="simulated")
         return True
 
 
@@ -104,7 +105,7 @@ class DockerExecutor(BaseExecutor):
             )
         except Exception as e:
             duration = time.time() - start
-            logger.error("Docker execution failed for %s: %s", task_id, e)
+            log.error("docker_execution_failed", task_id=task_id, error=str(e))
             if task_id in self._containers:
                 try:
                     self._containers[task_id].remove(force=True)
@@ -127,7 +128,7 @@ class DockerExecutor(BaseExecutor):
             del self._containers[task_id]
             return True
         except Exception as e:
-            logger.error("Failed to cancel %s: %s", task_id, e)
+            log.error("task_cancel_failed", task_id=task_id, error=str(e))
             return False
 
 

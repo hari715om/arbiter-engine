@@ -1,9 +1,10 @@
 import time
 import threading
-import logging
 from typing import Callable
 
-logger = logging.getLogger(__name__)
+from arbiter.logging_config import get_logger
+
+log = get_logger(__name__)
 
 
 class HeartbeatMonitor:
@@ -28,8 +29,10 @@ class HeartbeatMonitor:
             for wid, last in list(self._heartbeats.items()):
                 if now - last > self._timeout:
                     failed.append(wid)
-                    logger.warning("Worker %s missed heartbeat (%.1fs ago)", wid, now - last)
         for wid in failed:
+            log.warning("worker_heartbeat_timeout", worker_id=wid,
+                        seconds_elapsed=round(now - self._heartbeats.get(wid, now), 1),
+                        timeout=self._timeout)
             self._on_failure(wid)
         return failed
 

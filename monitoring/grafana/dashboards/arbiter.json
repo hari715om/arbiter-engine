@@ -1,0 +1,159 @@
+{
+"id": null,
+"uid": "arbiter-main",
+"title": "Arbiter Engine — Live Dashboard",
+"description": "Real-time task scheduling observability for Arbiter Engine",
+"tags": ["arbiter", "scheduling", "tasks", "workers"],
+"timezone": "browser",
+"schemaVersion": 36,
+"version": 1,
+"refresh": "15s",
+"time": {"from": "now-1h", "to": "now"},
+"panels": [
+{
+"id": 1,
+"title": "Task Throughput",
+"type": "timeseries",
+"gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+"datasource": "Prometheus",
+"targets": [
+{
+"expr": "rate(arbiter_tasks_total{status='completed'}[1m])",
+"legendFormat": "Completed/s",
+"refId": "A"
+},
+{
+"expr": "rate(arbiter_tasks_total{status='failed'}[1m])",
+"legendFormat": "Failed/s",
+"refId": "B"
+}
+],
+"fieldConfig": {
+"defaults": {"unit": "reqps", "color": {"mode": "palette-classic"}},
+"overrides": [{"matcher": {"id": "byName", "options": "Failed/s"}, "properties": [{"id": "color", "value":
+{"fixedColor": "red", "mode": "fixed"}}]}]
+}
+},
+{
+"id": 2,
+"title": "SLA Violation Rate",
+"type": "gauge",
+"gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+"datasource": "Prometheus",
+"targets": [
+{
+"expr": "arbiter_sla_violations_total / clamp_min(arbiter_tasks_total{status='completed'}, 1) * 100",
+"legendFormat": "SLA violation %",
+"refId": "A"
+}
+],
+"fieldConfig": {
+"defaults": {
+"unit": "percent",
+"min": 0, "max": 100,
+"thresholds": {
+"mode": "absolute",
+"steps": [
+{"color": "green", "value": null},
+{"color": "yellow", "value": 10},
+{"color": "red", "value": 25}
+]
+}
+}
+}
+},
+{
+"id": 3,
+"title": "Queue Depth",
+"type": "gauge",
+"gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+"datasource": "Prometheus",
+"targets": [
+{
+"expr": "arbiter_queue_depth",
+"legendFormat": "Queued tasks",
+"refId": "A"
+}
+],
+"fieldConfig": {
+"defaults": {
+"unit": "short",
+"min": 0,
+"thresholds": {
+"mode": "absolute",
+"steps": [
+{"color": "green", "value": null},
+{"color": "yellow", "value": 50},
+{"color": "red", "value": 200}
+]
+}
+}
+}
+},
+{
+"id": 4,
+"title": "Worker Utilization",
+"type": "barchart",
+"gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+"datasource": "Prometheus",
+"targets": [
+{
+"expr": "arbiter_worker_utilization_ratio",
+"legendFormat": "{{worker_id}}",
+"refId": "A"
+}
+],
+"fieldConfig": {
+"defaults": {
+"unit": "percentunit",
+"min": 0, "max": 1,
+"thresholds": {
+"mode": "absolute",
+"steps": [
+{"color": "blue", "value": null},
+{"color": "green", "value": 0.3},
+{"color": "yellow", "value": 0.7},
+{"color": "red", "value": 0.9}
+]
+}
+}
+}
+},
+{
+"id": 5,
+"title": "Scheduler Decisions",
+"type": "piechart",
+"gridPos": {"h": 8, "w": 6, "x": 12, "y": 8},
+"datasource": "Prometheus",
+"targets": [
+{
+"expr": "arbiter_scheduler_decisions_total",
+"legendFormat": "{{scheduler}}",
+"refId": "A"
+}
+]
+},
+{
+"id": 6,
+"title": "Task Failure Breakdown",
+"type": "timeseries",
+"gridPos": {"h": 8, "w": 6, "x": 18, "y": 8},
+"datasource": "Prometheus",
+"targets": [
+{
+"expr": "increase(arbiter_task_failures_total[5m])",
+"legendFormat": "Failures (5m window)",
+"refId": "A"
+},
+{
+"expr": "increase(arbiter_tasks_preempted_total[5m])",
+"legendFormat": "Preemptions (5m window)",
+"refId": "B"
+}
+],
+"fieldConfig": {
+"defaults": {"unit": "short", "color": {"mode": "palette-classic"}}
+}
+}
+]
+}

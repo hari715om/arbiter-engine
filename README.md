@@ -9,26 +9,26 @@ Arbiter Engine is a **real scheduling system** — not a simulation toy. It expo
 ## Architecture
 
 ```
-                   ┌──────────────────────────────────────┐
+                   ┌───────────────────────────────────────┐
                    │           FastAPI REST API            │
                    │  /tasks  /workers  /schedule /metrics │
                    │  /health  /events  /ws/events         │
                    └────────────┬─────────────┬────────────┘
                                 │             │
               ┌─────────────────▼──┐   ┌──────▼──────────────┐
-              │  PostgreSQL (state) │   │  Redis (task queue)  │
+              │  PostgreSQL (state)│   │  Redis (task queue) │
               └─────────────────┬──┘   └──────┬──────────────┘
                                 │             │
-                    ┌───────────▼─────────────▼──────────┐
-                    │         Celery Worker Pool           │
-                    │  schedule_pending (beat: 5s)         │
-                    │  mark_task_completed                 │
+                    ┌───────────▼─────────────▼───────────┐
+                    │         Celery Worker Pool          │
+                    │  schedule_pending (beat: 5s)        │
+                    │  mark_task_completed                │
                     └───────────────┬────────────────────-┘
                                     │
-                    ┌──────────────-▼────────────────────--┐
-                    │          Scheduler Engine             │
+                    ┌──────────────-▼────────────────────────┐
+                    │          Scheduler Engine              │
                     │  FIFO │ Heuristic │ Utility │ RL │ Meta│
-                    └───────────────────────────────────────┘
+                    └────────────────────────────────────────┘
 ```
 
 ## Schedulers

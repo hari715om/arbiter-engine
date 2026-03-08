@@ -26,6 +26,7 @@ class TaskRecord(Base):
     retry_count = Column(Integer, default=0)
     max_retries = Column(Integer, default=2)
     dependencies = Column(Text, default="")  # comma-separated task IDs
+    webhook_url = Column(Text, nullable=True)  # POST to this URL on completion
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
